@@ -1,0 +1,29 @@
+name: Auto Unzip
+
+on:
+  push:
+    paths:
+      - '**.zip'
+
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Unzip files
+      run: |
+        # 解压当前目录下所有的 zip 文件，覆盖同名文件
+        unzip -o '*.zip'
+        # 删除解压后的原 zip 包，保持仓库干净
+        rm -f *.zip
+
+    - name: Commit and push changes
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        # [skip ci] 非常重要，防止死循环
+        commit_message: "Auto unzip files [skip ci]"
