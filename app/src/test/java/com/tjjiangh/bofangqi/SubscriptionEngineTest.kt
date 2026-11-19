@@ -30,4 +30,25 @@ class SubscriptionEngineTest {
 
         assertEquals("https://example.com/api.php?ac=detail&pg=3&t=12", result)
     }
+
+    @Test
+    fun buildApiUrl_keepsFragmentAfterNewParameters() {
+        val result = SubscriptionEngine.buildApiUrl(
+            apiUrl = "https://example.com/api.php?token=x#section",
+            vodId = "movie 1"
+        )
+
+        assertEquals(
+            "https://example.com/api.php?token=x&ac=detail&ids=movie+1#section",
+            result
+        )
+    }
+
+    @Test
+    fun buildApiUrl_doesNotAddExtraSeparatorAfterTrailingQuestionMark() {
+        assertEquals(
+            "https://example.com/api.php?ac=detail",
+            SubscriptionEngine.buildApiUrl("https://example.com/api.php?")
+        )
+    }
 }
