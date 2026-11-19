@@ -39,6 +39,7 @@ class NativeHomeFragment : Fragment() {
     private var currentPage = 1
     private var isLoadingMore = false
     private var loadJob: Job? = null
+    private var loadMoreJob: Job? = null
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val view = inflater.inflate(R.layout.fragment_native_home, container, false)
@@ -77,10 +78,13 @@ class NativeHomeFragment : Fragment() {
         rvMovieGrid.adapter = movieAdapter
         rvMovieGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                if (dy <= 0 || isLoadingMore) return
+                if (dy <= 0 || isLoadingMore || layoutManager.itemCount == 0) return
                 val firstVisible = layoutManager.findFirstVisibleItemPosition()
-                val thresholdReached = firstVisible + layoutManager.childCount >= layoutManager.itemCount - 6
-                if (thresholdReached) loadMoreData()
+                if (firstVisible != RecyclerView.NO_POSITION &&
+                    firstVisible + layoutManager.childCount >= layoutManager.itemCount - PREFETCH_THRESHOLD
+                ) {
+                    loadMoreData()
+                }
             }
         })
     }
@@ -93,7 +97,9 @@ class NativeHomeFragment : Fragment() {
 
         tabCategory.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
-                currentTypeId = tab.tag as? String ?: ""
+                val selectedType = tab.tag as? String ?: ""
+                if (selectedType == currentTypeId) return
+                currentTypeId = selectedType
                 currentPage = 1
                 loadMovieData(isRefresh = true)
             }
@@ -124,12 +130,16 @@ class NativeHomeFragment : Fragment() {
                     loadSourceAndData()
                 } else {
                     swipeRefreshLayout.isRefreshing = false
-                    Toast.makeText(requireContext(), "订阅源无法解析，请切换其他��", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "订阅源无法解析，请切换其他源", Toast.LENGTH_SHORT).show()
                 }
             }
             return
         }
 
+        if (rawUrl != currentApiUrl) {
+            currentTypeId = ""
+            currentPage = 1
+        }
         currentApiUrl = rawUrl
         loadCategories()
         loadMovieData(isRefresh = true)
@@ -137,11 +147,12 @@ class NativeHomeFragment : Fragment() {
 
     private fun loadCategories() {
         lifecycleScope.launch {
+            val sourceUrl = currentApiUrl
             val categories = buildList {
                 add(CategoryItem("", "推荐"))
-                addAll(SubscriptionEngine.fetchCategories(currentApiUrl))
+                addAll(SubscriptionEngine.fetchCategories(sourceUrl))
             }
-            if (!isAdded) return@launch
+            if (!isAdded || sourceUrl != currentApiUrl) return@launch
 
             tabCategory.removeAllTabs()
             categories.forEach { category ->
@@ -155,31 +166,41 @@ class NativeHomeFragment : Fragment() {
     private fun loadMovieData(isRefresh: Boolean) {
         if (currentApiUrl.isBlank()) return
         loadJob?.cancel()
+        loadMoreJob?.cancel()
+        isLoadingMore = false
+        val sourceUrl = currentApiUrl
+        val typeId = currentTypeId
+        val page = currentPage
         swipeRefreshLayout.isRefreshing = true
         loadJob = lifecycleScope.launch {
-            val items = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, currentPage)
-            if (!isAdded) return@launch
-            swipeRefreshLayout.isRefreshing = false
+            try {
+                val items = SubscriptionEngine.fetchVodList(sourceUrl, typeId, page)
+                if (!isAdded || sourceUrl != currentApiUrl || typeId != currentTypeId) return@launch
 
-            if (items.isEmpty()) {
+                if (items.isEmpty()) {
+                    if (isRefresh) {
+                        movieAdapter.setData(emptyList())
+                        bannerAdapter.updateData(emptyList())
+                        viewPagerBanner.visibility = View.GONE
+                        Toast.makeText(requireContext(), "当前源暂无数据，请切换影视源", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+
                 if (isRefresh) {
-                    movieAdapter.setData(emptyList())
-                    bannerAdapter.updateData(emptyList())
-                    viewPagerBanner.visibility = View.GONE
-                    Toast.makeText(requireContext(), "当前源暂无数据，请切换影视源", Toast.LENGTH_SHORT).show()
+                    val banners = items.take(5).map {
+                        BannerItem(it.vodId, it.vodName, it.vodPic, it.vodRemarks)
+                    }
+                    bannerAdapter.updateData(banners)
+                    viewPagerBanner.visibility = if (banners.isEmpty()) View.GONE else View.VISIBLE
+                    movieAdapter.setData(items)
+                } else {
+                    movieAdapter.appendData(items)
                 }
-                return@launch
-            }
-
-            if (isRefresh) {
-                val banners = items.take(5).map {
-                    BannerItem(it.vodId, it.vodName, it.vodPic, it.vodRemarks)
+            } finally {
+                if (isAdded && sourceUrl == currentApiUrl && typeId == currentTypeId) {
+                    swipeRefreshLayout.isRefreshing = false
                 }
-                bannerAdapter.updateData(banners)
-                viewPagerBanner.visibility = if (banners.isEmpty()) View.GONE else View.VISIBLE
-                movieAdapter.setData(items)
-            } else {
-                movieAdapter.appendData(items)
             }
         }
     }
@@ -187,11 +208,13 @@ class NativeHomeFragment : Fragment() {
     private fun loadMoreData() {
         if (isLoadingMore || currentApiUrl.isBlank()) return
         isLoadingMore = true
+        val sourceUrl = currentApiUrl
+        val typeId = currentTypeId
         val requestedPage = currentPage + 1
-        lifecycleScope.launch {
+        loadMoreJob = lifecycleScope.launch {
             try {
-                val items = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, requestedPage)
-                if (!isAdded) return@launch
+                val items = SubscriptionEngine.fetchVodList(sourceUrl, typeId, requestedPage)
+                if (!isAdded || sourceUrl != currentApiUrl || typeId != currentTypeId) return@launch
                 if (items.isNotEmpty()) {
                     currentPage = requestedPage
                     movieAdapter.appendData(items)
@@ -212,6 +235,11 @@ class NativeHomeFragment : Fragment() {
 
     override fun onDestroyView() {
         loadJob?.cancel()
+        loadMoreJob?.cancel()
         super.onDestroyView()
+    }
+
+    private companion object {
+        const val PREFETCH_THRESHOLD = 6
     }
 }
