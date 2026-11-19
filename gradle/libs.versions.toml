@@ -25,7 +25,7 @@ androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplaye
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
 glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "glide" }
-androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swipe-refresh-layout", version.ref = "swipeRefreshLayout" }
+androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version.ref = "swipeRefreshLayout" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

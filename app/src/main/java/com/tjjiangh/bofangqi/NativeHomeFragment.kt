@@ -93,9 +93,6 @@ class NativeHomeFragment : Fragment() {
 
         tabCategory.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
-                if (!viewLifecycleOwner.lifecycle.currentState.isAtLeast(
-                        androidx.lifecycle.Lifecycle.State.STARTED
-                    )) return
                 currentTypeId = tab.tag as? String ?: ""
                 currentPage = 1
                 loadMovieData(isRefresh = true)
@@ -127,7 +124,7 @@ class NativeHomeFragment : Fragment() {
                     loadSourceAndData()
                 } else {
                     swipeRefreshLayout.isRefreshing = false
-                    Toast.makeText(requireContext(), "订阅源无法解析，请切换其他源", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "订阅源无法解析，请切换其他��", Toast.LENGTH_SHORT).show()
                 }
             }
             return
@@ -148,12 +145,9 @@ class NativeHomeFragment : Fragment() {
 
             tabCategory.removeAllTabs()
             categories.forEach { category ->
-                tabCategory.newTab()
-                    .setText(category.typeName)
-                    .apply {
-                        tag = category.typeId
-                        tabCategory.addTab(this)
-                    }
+                val tab = tabCategory.newTab().setText(category.typeName)
+                tab.tag = category.typeId
+                tabCategory.addTab(tab)
             }
         }
     }
@@ -195,24 +189,25 @@ class NativeHomeFragment : Fragment() {
         isLoadingMore = true
         val requestedPage = currentPage + 1
         lifecycleScope.launch {
-            val items = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, requestedPage)
-            if (!isAdded) return@launch
-            isLoadingMore = false
-            if (items.isNotEmpty()) {
-                currentPage = requestedPage
-                movieAdapter.appendData(items)
+            try {
+                val items = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, requestedPage)
+                if (!isAdded) return@launch
+                if (items.isNotEmpty()) {
+                    currentPage = requestedPage
+                    movieAdapter.appendData(items)
+                }
+            } finally {
+                isLoadingMore = false
             }
         }
     }
 
     private fun openMovieDetail(vodId: String) {
-        startActivity(Intent(requireContext(), MovieGridAdapter::class.java).apply {
-            // The destination activity is resolved explicitly below in a separate intent.
+        val intent = Intent(requireContext(), MovieDetailActivity::class.java).apply {
             putExtra("EXTRA_VOD_ID", vodId)
             putExtra("EXTRA_API_URL", currentApiUrl)
-        }.apply {
-            setClass(requireContext(), MovieDetailActivity::class.java)
-        })
+        }
+        startActivity(intent)
     }
 
     override fun onDestroyView() {
