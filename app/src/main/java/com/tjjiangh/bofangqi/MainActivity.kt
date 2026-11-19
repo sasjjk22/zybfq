@@ -17,58 +17,47 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 100% 保留：恢复深色/夜间模式
-        val prefs = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-        val isDarkMode = prefs.getBoolean("dark_mode", false)
-        if (isDarkMode) {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_DARK_MODE, false)) {
             AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         }
 
         setContentView(R.layout.activity_main)
-
         bottomNav = findViewById(R.id.bottom_navigation)
 
-        // 100% 保留：恢复切换主题/夜间模式前选中的 Tab (解决自动重置回首页的 BUG)
-        if (savedInstanceState != null) {
-            currentTabId = savedInstanceState.getInt("selected_tab_id", R.id.nav_home)
-        }
+        currentTabId = savedInstanceState?.getInt(STATE_SELECTED_TAB, R.id.nav_home)
+            ?: R.id.nav_home
 
         bottomNav.setOnItemSelectedListener { item ->
-            currentTabId = item.itemId
-            switchFragment(item.itemId)
+            if (item.itemId != currentTabId) {
+                currentTabId = item.itemId
+                showTab(item.itemId)
+            }
             true
         }
 
         if (savedInstanceState == null) {
-            switchFragment(R.id.nav_home)
+            showTab(currentTabId)
         } else {
+            // FragmentManager restores the existing fragment. Updating selection here must not
+            // replace it and discard its scroll position or in-progress state.
             bottomNav.selectedItemId = currentTabId
         }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_SELECTED_TAB, currentTabId)
         super.onSaveInstanceState(outState)
-        outState.putInt("selected_tab_id", currentTabId)
     }
 
-    /**
-     * 核心智能路由分发：
-     * - 原生 API / 订阅源 ➔ 加载 NativeHomeFragment (海报墙)
-     * - 网页站点 ➔ 加载 HomeFragment (网页嗅探)
-     */
     private fun createHomeFragment(): Fragment {
         val activeSource = SourceStorage.getActiveSource(this)
-        val isWebSource = activeSource?.isWebApi == true || (activeSource?.type == SourceModel.TYPE_WEB)
-
-        return if (isWebSource) {
-            HomeFragment()
-        } else {
-            NativeHomeFragment()
-        }
+        val isWebSource = activeSource?.isWebApi == true || activeSource?.type == SourceModel.TYPE_WEB
+        return if (isWebSource) HomeFragment() else NativeHomeFragment()
     }
 
-    private fun switchFragment(itemId: Int) {
-        val fragment: Fragment = when (itemId) {
+    private fun showTab(itemId: Int) {
+        val fragment = when (itemId) {
             R.id.nav_home -> createHomeFragment()
             R.id.nav_history -> HistoryFragment()
             R.id.nav_download -> DownloadFragment()
@@ -81,12 +70,16 @@ class MainActivity : AppCompatActivity() {
             .commit()
     }
 
-    /**
-     * 公开刷新入口：供 SettingFragment 或 SourceSelectDialog 切源后刷新首页
-     */
+    /** Refresh the home screen after the active source changes. */
     fun reloadHomeFragment() {
         if (currentTabId == R.id.nav_home) {
-            switchFragment(R.id.nav_home)
+            showTab(R.id.nav_home)
         }
+    }
+
+    private companion object {
+        const val PREFS_NAME = "app_settings"
+        const val KEY_DARK_MODE = "dark_mode"
+        const val STATE_SELECTED_TAB = "selected_tab_id"
     }
 }

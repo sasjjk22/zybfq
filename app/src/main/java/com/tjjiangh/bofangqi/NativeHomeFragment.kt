@@ -21,6 +21,7 @@ import com.tjjiangh.bofangqi.source.SourceStorage
 import com.tjjiangh.bofangqi.subscription.BannerItem
 import com.tjjiangh.bofangqi.subscription.CategoryItem
 import com.tjjiangh.bofangqi.subscription.SubscriptionEngine
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 class NativeHomeFragment : Fragment() {
@@ -33,14 +34,13 @@ class NativeHomeFragment : Fragment() {
     private lateinit var bannerAdapter: BannerAdapter
     private lateinit var movieAdapter: MovieGridAdapter
 
-    private var currentApiUrl: String = ""
-    private var currentTypeId: String = ""
-    private var currentPage: Int = 1
-    private var isLoadingMore: Boolean = false
+    private var currentApiUrl = ""
+    private var currentTypeId = ""
+    private var currentPage = 1
+    private var isLoadingMore = false
+    private var loadJob: Job? = null
 
-    private val categories = mutableListOf<CategoryItem>()
-
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val view = inflater.inflate(R.layout.fragment_native_home, container, false)
         initViews(view)
         setupRecyclerView()
@@ -59,44 +59,28 @@ class NativeHomeFragment : Fragment() {
             startActivity(Intent(requireContext(), SearchActivity::class.java))
         }
 
-        tabCategory.setOnClickListener {
-            showSourceSelectDialog()
-        }
+        tabCategory.setOnClickListener { showSourceSelectDialog() }
 
-        bannerAdapter = BannerAdapter { banner ->
-            openMovieDetail(banner.vodId)
-        }
+        bannerAdapter = BannerAdapter { openMovieDetail(it.vodId) }
         viewPagerBanner.adapter = bannerAdapter
-
-        movieAdapter = MovieGridAdapter { vodItem ->
-            openMovieDetail(vodItem.vodId)
-        }
+        movieAdapter = MovieGridAdapter { openMovieDetail(it.vodId) }
     }
 
     private fun showSourceSelectDialog() {
-        val dialog = SourceSelectDialog {
-            loadSourceAndData()
-        }
-        dialog.show(childFragmentManager, "SourceSelectDialog")
+        SourceSelectDialog { loadSourceAndData() }
+            .show(childFragmentManager, "SourceSelectDialog")
     }
 
     private fun setupRecyclerView() {
-        val gridLayoutManager = GridLayoutManager(requireContext(), 3)
-        rvMovieGrid.layoutManager = gridLayoutManager
+        val layoutManager = GridLayoutManager(requireContext(), 3)
+        rvMovieGrid.layoutManager = layoutManager
         rvMovieGrid.adapter = movieAdapter
-
         rvMovieGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                super.onScrolled(recyclerView, dx, dy)
-                if (dy > 0 && !isLoadingMore) {
-                    val visibleCount = gridLayoutManager.childCount
-                    val totalCount = gridLayoutManager.itemCount
-                    val firstVisiblePos = gridLayoutManager.findFirstVisibleItemPosition()
-
-                    if ((visibleCount + firstVisiblePos) >= totalCount - 6) {
-                        loadMoreData()
-                    }
-                }
+                if (dy <= 0 || isLoadingMore) return
+                val firstVisible = layoutManager.findFirstVisibleItemPosition()
+                val thresholdReached = firstVisible + layoutManager.childCount >= layoutManager.itemCount - 6
+                if (thresholdReached) loadMoreData()
             }
         })
     }
@@ -108,106 +92,131 @@ class NativeHomeFragment : Fragment() {
         }
 
         tabCategory.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab?) {
-                val typeId = tab?.tag as? String ?: ""
-                currentTypeId = typeId
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                if (!viewLifecycleOwner.lifecycle.currentState.isAtLeast(
+                        androidx.lifecycle.Lifecycle.State.STARTED
+                    )) return
+                currentTypeId = tab.tag as? String ?: ""
                 currentPage = 1
                 loadMovieData(isRefresh = true)
             }
-            override fun onTabUnselected(tab: TabLayout.Tab?) {}
-            override fun onTabReselected(tab: TabLayout.Tab?) {}
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
         })
     }
 
     private fun loadSourceAndData() {
         val activeSource = SourceStorage.getActiveSource(requireContext())
         if (activeSource == null) {
-            Toast.makeText(context, "请先配置有效影视源", Toast.LENGTH_LONG).show()
+            Toast.makeText(requireContext(), "请先配置有效影视源", Toast.LENGTH_LONG).show()
             swipeRefreshLayout.isRefreshing = false
             return
         }
 
         val rawUrl = activeSource.apiUrl.ifEmpty { activeSource.url }
-
-        // 核心突破：检测到当前选中的是 TvBox JSON 订阅源，自动在后台解包并刷新海报墙，彻底解决黑屏！
-        if (rawUrl.endsWith(".json") || rawUrl.contains("json")) {
+        if (rawUrl.endsWith(".json", ignoreCase = true) || rawUrl.contains("json", ignoreCase = true)) {
             swipeRefreshLayout.isRefreshing = true
             lifecycleScope.launch {
                 val subSources = SourceSpeedTester.parseTvBoxSubscription(rawUrl)
+                if (!isAdded) return@launch
                 if (subSources.isNotEmpty()) {
                     SourceStorage.addSources(requireContext(), subSources)
-                    val firstSource = subSources[0]
+                    val firstSource = subSources.first()
                     SourceStorage.setActiveSource(requireContext(), firstSource.id)
-                    Toast.makeText(context, "🎉 已自动解包 TvBox 订阅，为你切换至 [${firstSource.name}]", Toast.LENGTH_LONG).show()
-                    loadSourceAndData() // 递归加载解包出的第一个真实源
+                    Toast.makeText(requireContext(), "已解包订阅：${firstSource.name}", Toast.LENGTH_LONG).show()
+                    loadSourceAndData()
                 } else {
                     swipeRefreshLayout.isRefreshing = false
-                    Toast.makeText(context, "⚠️ 当前订阅源无法解析出海报，请点击切换源", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "订阅源无法解析，请切换其他源", Toast.LENGTH_SHORT).show()
                 }
             }
             return
         }
 
         currentApiUrl = rawUrl
-
-        lifecycleScope.launch {
-            val list = SubscriptionEngine.fetchCategories(currentApiUrl)
-            categories.clear()
-            categories.add(CategoryItem("", "推荐"))
-            categories.addAll(list)
-
-            tabCategory.removeAllTabs()
-            for (cat in categories) {
-                val tab = tabCategory.newTab().setText(cat.typeName)
-                tab.tag = cat.typeId
-                tabCategory.addTab(tab)
-            }
-        }
-
+        loadCategories()
         loadMovieData(isRefresh = true)
     }
 
-    private fun loadMovieData(isRefresh: Boolean) {
-        swipeRefreshLayout.isRefreshing = true
+    private fun loadCategories() {
         lifecycleScope.launch {
-            val vodList = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, currentPage)
+            val categories = buildList {
+                add(CategoryItem("", "推荐"))
+                addAll(SubscriptionEngine.fetchCategories(currentApiUrl))
+            }
+            if (!isAdded) return@launch
+
+            tabCategory.removeAllTabs()
+            categories.forEach { category ->
+                tabCategory.newTab()
+                    .setText(category.typeName)
+                    .apply {
+                        tag = category.typeId
+                        tabCategory.addTab(this)
+                    }
+            }
+        }
+    }
+
+    private fun loadMovieData(isRefresh: Boolean) {
+        if (currentApiUrl.isBlank()) return
+        loadJob?.cancel()
+        swipeRefreshLayout.isRefreshing = true
+        loadJob = lifecycleScope.launch {
+            val items = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, currentPage)
+            if (!isAdded) return@launch
             swipeRefreshLayout.isRefreshing = false
 
-            if (vodList.isNotEmpty()) {
+            if (items.isEmpty()) {
                 if (isRefresh) {
-                    val bannerItems = vodList.take(5).map {
-                        BannerItem(it.vodId, it.vodName, it.vodPic, it.vodRemarks)
-                    }
-                    bannerAdapter.updateData(bannerItems)
-                    viewPagerBanner.visibility = if (bannerItems.isNotEmpty()) View.VISIBLE else View.GONE
-
-                    movieAdapter.setData(vodList)
-                } else {
-                    movieAdapter.appendData(vodList)
+                    movieAdapter.setData(emptyList())
+                    bannerAdapter.updateData(emptyList())
+                    viewPagerBanner.visibility = View.GONE
+                    Toast.makeText(requireContext(), "当前源暂无数据，请切换影视源", Toast.LENGTH_SHORT).show()
                 }
-            } else if (isRefresh) {
-                Toast.makeText(context, "当前源暂无海报数据，建议点击搜索框选择【切换影视源】", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            if (isRefresh) {
+                val banners = items.take(5).map {
+                    BannerItem(it.vodId, it.vodName, it.vodPic, it.vodRemarks)
+                }
+                bannerAdapter.updateData(banners)
+                viewPagerBanner.visibility = if (banners.isEmpty()) View.GONE else View.VISIBLE
+                movieAdapter.setData(items)
+            } else {
+                movieAdapter.appendData(items)
             }
         }
     }
 
     private fun loadMoreData() {
+        if (isLoadingMore || currentApiUrl.isBlank()) return
         isLoadingMore = true
-        currentPage++
+        val requestedPage = currentPage + 1
         lifecycleScope.launch {
-            val vodList = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, currentPage)
+            val items = SubscriptionEngine.fetchVodList(currentApiUrl, currentTypeId, requestedPage)
+            if (!isAdded) return@launch
             isLoadingMore = false
-            if (vodList.isNotEmpty()) {
-                movieAdapter.appendData(vodList)
+            if (items.isNotEmpty()) {
+                currentPage = requestedPage
+                movieAdapter.appendData(items)
             }
         }
     }
 
     private fun openMovieDetail(vodId: String) {
-        val intent = Intent(requireContext(), MovieDetailActivity::class.java).apply {
+        startActivity(Intent(requireContext(), MovieGridAdapter::class.java).apply {
+            // The destination activity is resolved explicitly below in a separate intent.
             putExtra("EXTRA_VOD_ID", vodId)
             putExtra("EXTRA_API_URL", currentApiUrl)
-        }
-        startActivity(intent)
+        }.apply {
+            setClass(requireContext(), MovieDetailActivity::class.java)
+        })
+    }
+
+    override fun onDestroyView() {
+        loadJob?.cancel()
+        super.onDestroyView()
     }
 }
