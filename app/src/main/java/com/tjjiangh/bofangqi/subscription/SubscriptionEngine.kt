@@ -1,6 +1,5 @@
 package com.tjjiangh.bofangqi.subscription
 
-import android.net.Uri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -8,10 +7,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 object SubscriptionEngine {
 
-    /** Perform a bounded HTTP GET and always release the connection and response stream. */
     private suspend fun fetchJsonString(urlString: String): String = withContext(Dispatchers.IO) {
         var connection: HttpURLConnection? = null
         try {
@@ -20,7 +19,6 @@ object SubscriptionEngine {
             connection.connectTimeout = CONNECT_TIMEOUT_MS
             connection.readTimeout = READ_TIMEOUT_MS
             connection.setRequestProperty("User-Agent", USER_AGENT)
-
             if (connection.responseCode != HttpURLConnection.HTTP_OK) return@withContext ""
             connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } catch (cancelled: CancellationException) {
@@ -36,7 +34,6 @@ object SubscriptionEngine {
         try {
             val jsonString = fetchJsonString(apiUrl)
             if (jsonString.isBlank()) return@withContext emptyList()
-
             val classes = JSONObject(jsonString).optJSONArray("class") ?: JSONArray()
             buildList {
                 for (index in 0 until classes.length()) {
@@ -63,7 +60,6 @@ object SubscriptionEngine {
         try {
             val jsonString = fetchJsonString(buildApiUrl(apiUrl, vodId = vodId))
             if (jsonString.isBlank()) return@withContext null
-
             val vod = JSONObject(jsonString).optJSONArray("list")?.optJSONObject(0)
                 ?: return@withContext null
             val item = parseVodItem(vod)
@@ -78,10 +74,7 @@ object SubscriptionEngine {
                 vodActor = vod.optString("vod_actor"),
                 vodDirector = vod.optString("vod_director"),
                 vodContent = vod.optString("vod_content").replace(HTML_TAG_REGEX, "").trim(),
-                routes = parsePlayRoutes(
-                    vod.optString("vod_play_from"),
-                    vod.optString("vod_play_url")
-                )
+                routes = parsePlayRoutes(vod.optString("vod_play_from"), vod.optString("vod_play_url"))
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -107,7 +100,7 @@ object SubscriptionEngine {
         }
     }
 
-    /** Build API parameters with proper escaping, preserving any existing endpoint query. */
+    /** Append escaped API parameters without changing existing query strings or fragments. */
     internal fun buildApiUrl(
         apiUrl: String,
         page: Int? = null,
@@ -115,14 +108,28 @@ object SubscriptionEngine {
         keyword: String? = null,
         vodId: String? = null
     ): String {
-        val builder = Uri.parse(apiUrl).buildUpon()
-            .appendQueryParameter("ac", "detail")
-        page?.let { builder.appendQueryParameter("pg", it.toString()) }
-        typeId?.takeIf { it.isNotEmpty() }?.let { builder.appendQueryParameter("t", it) }
-        keyword?.let { builder.appendQueryParameter("wd", it) }
-        vodId?.let { builder.appendQueryParameter("ids", it) }
-        return builder.build().toString()
+        val parameters = linkedMapOf("ac" to "detail")
+        page?.let { parameters["pg"] = it.toString() }
+        typeId?.takeIf { it.isNotEmpty() }?.let { parameters["t"] = it }
+        keyword?.let { parameters["wd"] = it }
+        vodId?.let { parameters["ids"] = it }
+
+        val fragmentIndex = apiUrl.indexOf('#')
+        val base = if (fragmentIndex >= 0) apiUrl.substring(0, fragmentIndex) else apiUrl
+        val fragment = if (fragmentIndex >= 0) apiUrl.substring(fragmentIndex) else ""
+        val separator = when {
+            '?' !in base -> "?"
+            base.endsWith('?') || base.endsWith('&') -> ""
+            else -> "&"
+        }
+        val encodedParameters = parameters.entries.joinToString("&") { (key, value) ->
+            "${encodeQueryComponent(key)}=${encodeQueryComponent(value)}"
+        }
+        return base + separator + encodedParameters + fragment
     }
+
+    private fun encodeQueryComponent(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private fun parseVodItem(obj: JSONObject) = VodItem(
         vodId = obj.optString("vod_id"),
@@ -134,7 +141,6 @@ object SubscriptionEngine {
 
     private fun parsePlayRoutes(playFrom: String, playUrl: String): List<PlayRoute> {
         if (playUrl.isEmpty()) return emptyList()
-
         val routeNames = playFrom.split("$$$")
         return playUrl.split("$$$").mapIndexedNotNull { index, routeUrl ->
             val name = routeNames.getOrNull(index)?.takeIf { it.isNotBlank() }
