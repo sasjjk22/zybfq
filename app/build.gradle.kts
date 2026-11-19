@@ -35,14 +35,11 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    // 引入官方 Media3 播放器核心库
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-// 引入播放器界面组件（包含暂停/进度条UI）
-    implementation("androidx.media3:media3-ui:1.3.1")
-// 引入 HLS (m3u8) 视频格式支持
-    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
-    implementation("com.github.bumptech.glide:glide:4.16.0")
-    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.glide)
+    implementation(libs.androidx.swiperefreshlayout)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.activity)
